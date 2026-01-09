@@ -1735,7 +1735,6 @@ dependencies = [
  "base-reth-flashblocks",
  "base-reth-rpc",
  "chrono",
- "derive_more",
  "eyre",
  "futures-util",
  "jsonrpsee",

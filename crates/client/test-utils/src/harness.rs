@@ -1,12 +1,14 @@
-//! Unified test harness combining node and engine helpers, plus optional flashblocks adapter.
+//! Unified test harness combining node and engine helpers with Flashblocks support enabled by
+//! default.
 
-use std::time::Duration;
+use std::{sync::Arc, time::Duration};
 
 use alloy_eips::{BlockHashOrNumber, eip7685::Requests};
 use alloy_primitives::{B64, B256, Bytes};
 use alloy_provider::{Provider, RootProvider};
 use alloy_rpc_types::BlockNumberOrTag;
 use alloy_rpc_types_engine::PayloadAttributes;
+use base_flashtypes::Flashblock;
 use eyre::{Result, eyre};
 use futures_util::Future;
 use op_alloy_network::Optimism;
@@ -25,14 +27,21 @@ use crate::{
     BLOCK_BUILD_DELAY_MS, BLOCK_TIME_SECONDS, GAS_LIMIT, L1_BLOCK_INFO_DEPOSIT_TX,
     NODE_STARTUP_DELAY_MS, TestAccounts,
     engine::{EngineApi, IpcEngine},
-    node::{LocalNode, LocalNodeProvider, OpAddOns, OpBuilder, default_launcher},
+    node::{
+        FlashblocksLocalNode, LocalFlashblocksState, LocalNodeProvider, OpAddOns, OpBuilder,
+        default_launcher,
+    },
     tracing::init_silenced_tracing,
 };
 
-/// High-level façade that bundles a local node, engine API client, and common helpers.
+/// High-level façade that bundles a local node, engine API client, Flashblocks support, and common
+/// helpers.
+///
+/// Flashblocks is enabled by default. The harness provides methods to send flashblocks and access
+/// flashblocks state.
 #[derive(Debug)]
 pub struct TestHarness {
-    node: LocalNode,
+    node: FlashblocksLocalNode,
     engine: EngineApi<IpcEngine>,
     accounts: TestAccounts,
 }
@@ -43,6 +52,15 @@ impl TestHarness {
         Self::with_launcher(default_launcher).await
     }
 
+    /// Launch the harness configured for manual canonical progression.
+    ///
+    /// When manual canonical mode is enabled, the harness will not automatically process
+    /// canonical block notifications. This is useful for tests that need to control
+    /// the timing of canonical block processing.
+    pub async fn manual_canonical() -> Result<Self> {
+        Self::manual_canonical_with_launcher(default_launcher).await
+    }
+
     /// Launch the harness with a custom node launcher (e.g. to tweak components).
     pub async fn with_launcher<L, LRet>(launcher: L) -> Result<Self>
     where
@@ -50,23 +68,36 @@ impl TestHarness {
         LRet: Future<Output = eyre::Result<NodeHandle<Adapter<OpNode>, OpAddOns>>>,
     {
         init_silenced_tracing();
-        let node = LocalNode::new(launcher).await?;
-        Self::from_node(node).await
+        let flash_node = FlashblocksLocalNode::with_launcher(launcher).await?;
+        Self::from_flashblocks_node(flash_node).await
     }
 
-    /// Build a harness from an already-running [`LocalNode`].
-    pub(crate) async fn from_node(node: LocalNode) -> Result<Self> {
-        let engine = node.engine_api()?;
+    /// Launch the harness with a custom launcher while disabling automatic canonical processing.
+    pub async fn manual_canonical_with_launcher<L, LRet>(launcher: L) -> Result<Self>
+    where
+        L: FnOnce(OpBuilder) -> LRet,
+        LRet: Future<Output = eyre::Result<NodeHandle<Adapter<OpNode>, OpAddOns>>>,
+    {
+        init_silenced_tracing();
+        let flash_node = FlashblocksLocalNode::with_manual_canonical_launcher(launcher).await?;
+        Self::from_flashblocks_node(flash_node).await
+    }
+
+    async fn from_flashblocks_node(flash_node: FlashblocksLocalNode) -> Result<Self> {
+        let engine = flash_node.as_node().engine_api()?;
         let accounts = TestAccounts::new();
 
         sleep(Duration::from_millis(NODE_STARTUP_DELAY_MS)).await;
 
-        Ok(Self { node, engine, accounts })
+        Ok(Self { node: flash_node, engine, accounts })
     }
 
     /// Return an Optimism JSON-RPC provider connected to the harness node.
     pub fn provider(&self) -> RootProvider<Optimism> {
-        self.node.provider().expect("provider should always be available after node initialization")
+        self.node
+            .as_node()
+            .provider()
+            .expect("provider should always be available after node initialization")
     }
 
     /// Access the deterministic test accounts backing the harness.
@@ -76,18 +107,47 @@ impl TestHarness {
 
     /// Access the low-level blockchain provider for direct database queries.
     pub fn blockchain_provider(&self) -> LocalNodeProvider {
-        self.node.blockchain_provider()
+        self.node.as_node().blockchain_provider()
     }
 
     /// HTTP URL for sending JSON-RPC requests to the local node.
     pub fn rpc_url(&self) -> String {
-        format!("http://{}", self.node.http_api_addr)
+        format!("http://{}", self.node.as_node().http_api_addr)
     }
 
     /// Websocket URL for subscribing to JSON-RPC notifications.
     pub fn ws_url(&self) -> String {
-        format!("ws://{}", self.node.ws_api_addr)
+        format!("ws://{}", self.node.as_node().ws_api_addr)
     }
+
+    // -------------------------------------------------------------------------
+    // Flashblocks methods
+    // -------------------------------------------------------------------------
+
+    /// Get a handle to the in-memory Flashblocks state backing the harness.
+    pub fn flashblocks_state(&self) -> Arc<LocalFlashblocksState> {
+        self.node.flashblocks_state()
+    }
+
+    /// Send a single flashblock through the harness.
+    pub async fn send_flashblock(&self, flashblock: Flashblock) -> Result<()> {
+        self.node.send_flashblock(flashblock).await
+    }
+
+    /// Send a batch of flashblocks sequentially, awaiting each confirmation.
+    pub async fn send_flashblocks<I>(&self, flashblocks: I) -> Result<()>
+    where
+        I: IntoIterator<Item = Flashblock>,
+    {
+        for flashblock in flashblocks {
+            self.send_flashblock(flashblock).await?;
+        }
+        Ok(())
+    }
+
+    // -------------------------------------------------------------------------
+    // Block building methods
+    // -------------------------------------------------------------------------
 
     /// Build a block using the provided transactions and push it through the engine.
     pub async fn build_block_from_transactions(&self, mut transactions: Vec<Bytes>) -> Result<()> {
@@ -108,7 +168,7 @@ impl TestHarness {
         let next_timestamp = latest_block.header.timestamp + BLOCK_TIME_SECONDS;
 
         let min_base_fee = latest_block.header.base_fee_per_gas.unwrap_or_default();
-        let chain_spec = self.node.blockchain_provider().chain_spec();
+        let chain_spec = self.node.as_node().blockchain_provider().chain_spec();
         let base_fee_params = chain_spec.base_fee_params_at_timestamp(next_timestamp);
         let eip_1559_params = ((base_fee_params.max_change_denominator as u64) << 32)
             | (base_fee_params.elasticity_multiplier as u64);

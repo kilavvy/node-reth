@@ -4,17 +4,15 @@ use std::{sync::Arc, time::Duration};
 
 use alloy_consensus::{Receipt, Transaction};
 use alloy_eips::{BlockHashOrNumber, Encodable2718};
-use alloy_primitives::{
-    Address, B256, BlockNumber, Bytes, U256, hex::FromHex, map::foldhash::HashMap,
-};
+use alloy_primitives::{Address, B256, BlockNumber, Bytes, U256, map::foldhash::HashMap};
 use alloy_rpc_types_engine::PayloadId;
 use base_flashtypes::{
     ExecutionPayloadBaseV1, ExecutionPayloadFlashblockDeltaV1, Flashblock, Metadata,
 };
 use base_reth_flashblocks::{FlashblocksAPI, FlashblocksState, PendingBlocksAPI};
 use base_reth_test_utils::{
-    FlashblocksHarness, L1_BLOCK_INFO_DEPOSIT_TX, L1_BLOCK_INFO_DEPOSIT_TX_HASH, LocalNodeProvider,
-    TestAccounts,
+    L1_BLOCK_INFO_DEPOSIT_TX, L1_BLOCK_INFO_DEPOSIT_TX_HASH, LocalNodeProvider,
+    TestHarness as BaseTestHarness, User,
 };
 use op_alloy_consensus::OpDepositReceipt;
 use op_alloy_network::BlockResponse;
@@ -31,28 +29,18 @@ use tokio::time::sleep;
 // so it can be processed by the state processor
 const SLEEP_TIME: u64 = 10;
 
-#[derive(Eq, PartialEq, Debug, Hash, Clone, Copy)]
-enum User {
-    Alice,
-    Bob,
-    Charlie,
-}
-
 struct TestHarness {
-    node: FlashblocksHarness,
+    node: BaseTestHarness,
     flashblocks: Arc<FlashblocksState<LocalNodeProvider>>,
     provider: LocalNodeProvider,
-    user_to_address: HashMap<User, Address>,
-    user_to_private_key: HashMap<User, B256>,
 }
 
 impl TestHarness {
     async fn new() -> Self {
         // These tests simulate pathological timing (missing receipts, reorgs, etc.), so we disable
         // the automatic canonical listener and only apply blocks when the test explicitly requests it.
-        let node = FlashblocksHarness::manual_canonical()
-            .await
-            .expect("able to launch flashblocks harness");
+        let node =
+            BaseTestHarness::manual_canonical().await.expect("able to launch flashblocks harness");
         let provider = node.blockchain_provider();
         let flashblocks = node.flashblocks_state();
 
@@ -64,35 +52,15 @@ impl TestHarness {
             .expect("able to recover block");
         flashblocks.on_canonical_block_received(genesis_block);
 
-        let accounts: TestAccounts = node.accounts().clone();
-
-        let mut user_to_address = HashMap::default();
-        user_to_address.insert(User::Alice, accounts.alice.address);
-        user_to_address.insert(User::Bob, accounts.bob.address);
-        user_to_address.insert(User::Charlie, accounts.charlie.address);
-
-        let mut user_to_private_key = HashMap::default();
-        user_to_private_key
-            .insert(User::Alice, Self::decode_private_key(accounts.alice.private_key));
-        user_to_private_key.insert(User::Bob, Self::decode_private_key(accounts.bob.private_key));
-        user_to_private_key
-            .insert(User::Charlie, Self::decode_private_key(accounts.charlie.private_key));
-
-        Self { node, flashblocks, provider, user_to_address, user_to_private_key }
-    }
-
-    fn decode_private_key(key: &str) -> B256 {
-        B256::from_hex(key).expect("valid hex-encoded key")
+        Self { node, flashblocks, provider }
     }
 
     fn address(&self, u: User) -> Address {
-        assert!(self.user_to_address.contains_key(&u));
-        self.user_to_address[&u]
+        u.address(self.node.accounts())
     }
 
     fn signer(&self, u: User) -> B256 {
-        assert!(self.user_to_private_key.contains_key(&u));
-        self.user_to_private_key[&u]
+        u.private_key(self.node.accounts())
     }
 
     fn canonical_account(&self, u: User) -> Account {

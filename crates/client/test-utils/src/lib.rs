@@ -4,7 +4,7 @@
 #![cfg_attr(not(test), warn(unused_crate_dependencies))]
 
 mod accounts;
-pub use accounts::{ALICE, Account, BOB, CHARLIE, DEPLOYER, TestAccount, TestAccounts};
+pub use accounts::{ALICE, Account, BOB, CHARLIE, DEPLOYER, TestAccount, TestAccounts, User};
 
 mod constants;
 pub use constants::{
@@ -20,9 +20,6 @@ pub use engine::{EngineAddress, EngineApi, EngineProtocol, HttpEngine, IpcEngine
 
 mod fixtures;
 pub use fixtures::{create_provider_factory, load_genesis};
-
-mod flashblocks_harness;
-pub use flashblocks_harness::FlashblocksHarness;
 
 mod harness;
 pub use harness::TestHarness;

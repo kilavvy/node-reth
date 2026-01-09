@@ -2,7 +2,7 @@
 
 use alloy_consensus::{SignableTransaction, Transaction};
 use alloy_eips::eip2718::Encodable2718;
-use alloy_primitives::{Address, Bytes, FixedBytes, TxHash, address, hex};
+use alloy_primitives::{Address, B256, Bytes, FixedBytes, TxHash, address, hex, hex::FromHex};
 use alloy_signer::SignerSync;
 use alloy_signer_local::PrivateKeySigner;
 use eyre::Result;
@@ -158,3 +158,35 @@ pub const DEPLOYER: TestAccount = TestAccount {
     address: address!("90F79bf6EB2c4f870365E785982E1f101E93b906"),
     private_key: "7c852118294e51e653712a81e05800f419141751be58f605c371e15141b007a6",
 };
+
+/// Enum representing the standard test users, mapping to [`TestAccounts`] members.
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
+pub enum User {
+    /// Alice - first test account
+    Alice,
+    /// Bob - second test account
+    Bob,
+    /// Charlie - third test account
+    Charlie,
+}
+
+impl User {
+    /// Get the address for this user from the provided accounts.
+    pub fn address(&self, accounts: &TestAccounts) -> Address {
+        match self {
+            Self::Alice => accounts.alice.address,
+            Self::Bob => accounts.bob.address,
+            Self::Charlie => accounts.charlie.address,
+        }
+    }
+
+    /// Get the private key as B256 for this user from the provided accounts.
+    pub fn private_key(&self, accounts: &TestAccounts) -> B256 {
+        let key = match self {
+            Self::Alice => accounts.alice.private_key,
+            Self::Bob => accounts.bob.private_key,
+            Self::Charlie => accounts.charlie.private_key,
+        };
+        B256::from_hex(key).expect("valid hex-encoded key")
+    }
+}

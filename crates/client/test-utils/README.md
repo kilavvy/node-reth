@@ -94,7 +94,7 @@ async fn test_harness() -> eyre::Result<()> {
 }
 ```
 
-> Need pending-state testing? Use `FlashblocksHarness` (see Flashblocks section below) to gain `send_flashblock` helpers.
+> Flashblocks is enabled by default. Use `send_flashblock` and `flashblocks_state()` directly on `TestHarness`.
 
 **Key Methods:**
 - `new()` - Create new harness with node, engine, and accounts
@@ -207,14 +207,14 @@ Each account includes:
 
 ### 5. Flashblocks Support
 
-Use `FlashblocksHarness` when you need `send_flashblock` and access to the in-memory pending state.
+Flashblocks is enabled by default in `TestHarness`. Use `send_flashblock` and `flashblocks_state()` directly:
 
 ```rust,ignore
-use base_reth_test_utils::FlashblocksHarness;
+use base_reth_test_utils::TestHarness;
 
 #[tokio::test]
 async fn test_flashblocks() -> eyre::Result<()> {
-    let harness = FlashblocksHarness::new().await?;
+    let harness = TestHarness::new().await?;
 
     harness.send_flashblock(flashblock).await?;
 
@@ -225,9 +225,15 @@ async fn test_flashblocks() -> eyre::Result<()> {
 }
 ```
 
-`FlashblocksHarness` derefs to the base `TestHarness`, so you can keep using methods like `provider()`, `build_block_from_transactions`, etc.
+For tests that need manual control over canonical block processing, use `manual_canonical()`:
 
-Test flashblocks delivery without WebSocket connections by constructing payloads and sending them through `FlashblocksHarness` (or the lower-level `FlashblocksLocalNode`).
+```rust,ignore
+let harness = TestHarness::manual_canonical().await?;
+// Canonical blocks won't be automatically processed
+// Call flashblocks_state().on_canonical_block_received() manually
+```
+
+Test flashblocks delivery without WebSocket connections by constructing payloads and sending them through `TestHarness` (or the lower-level `FlashblocksLocalNode`).
 
 ## Configuration Constants
 
@@ -257,8 +263,7 @@ test-utils/
 │   ├── contracts.rs           # Solidity contract bindings
 │   ├── engine.rs              # EngineApi (CL wrapper)
 │   ├── fixtures.rs            # Genesis loading, provider factories
-│   ├── flashblocks_harness.rs # FlashblocksHarness + helpers
-│   ├── harness.rs             # TestHarness (orchestration)
+│   ├── harness.rs             # TestHarness (orchestration + flashblocks)
 │   ├── node.rs                # LocalNode (EL wrapper)
 │   └── tracing.rs             # Tracing initialization helpers
 ├── assets/
